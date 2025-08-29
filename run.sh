@@ -174,7 +174,7 @@ PKGS=(
 )
 
 color_echo yellow "Installing baseline packages in one transaction…"
-dnf -y install "${PKGS[@]}"
+dnf -y install "${PKGS[@]}" "https://vencord.dev/download/vesktop/amd64/rpm"
 
 ### ---------- Group installs in one go ----------
 color_echo yellow "Installing DNF groups…"

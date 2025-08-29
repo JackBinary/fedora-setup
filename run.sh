@@ -26,50 +26,13 @@ backup_file() {
   fi
 }
 
-require_cmd() {
-  local cmd="$1"
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    color_echo yellow "Command '$cmd' is missing. Attempting to install…"
-    # Basic map for common utilities → package names
-    case "$cmd" in
-      git) pkg="git";;
-      wget) pkg="wget";;
-      curl) pkg="curl";;
-      unzip) pkg="unzip";;
-      rsync) pkg="rsync";;
-      make) pkg="make";;
-      gcc) pkg="gcc";;
-      kvantummanager|kvantum) pkg="kvantum";;
-      lookandfeeltool) pkg="plasma-workspace";;
-      gsettings) pkg="glib2";;
-      fwupdmgr) pkg="fwupd";;
-      *) pkg="$cmd";;
-    esac
-
-    if dnf list "$pkg" >/dev/null 2>&1; then
-      dnf -y install "$pkg"
-    else
-      color_echo red "Could not find a package providing '$cmd'. Please install manually."
-      exit 1
-    fi
-
-    # Re-check
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-      color_echo red "Failed to install '$cmd'. Aborting."
-      exit 1
-    fi
-  fi
-}
-
 run_or_warn() {
-  # run command; warn on failure but continue
   set +e
   "$@" || color_echo yellow "Warning: command failed (ignored): $*"
   set -e
 }
 
 detect_user() {
-  # Best-effort to find the real user (not root) for user-scoped settings
   if [[ -n "${SUDO_USER-}" && "${SUDO_USER}" != "root" ]]; then
     ACTUAL_USER="$SUDO_USER"
   else
@@ -94,8 +57,8 @@ detect_user
 
 color_echo cyan "Fedora Setup — starting… (user: $ACTUAL_USER; home: $ACTUAL_HOME)"
 
-# Ensure core tools
-dnf -y install dnf-plugins-core curl git wget unzip rsync || true
+# Minimal bootstrap so we can enable repos/COPRs in bulk
+dnf -y install dnf-plugins-core
 
 ### ---------- System upgrade & DNF tuning ----------
 color_echo blue "Upgrading system…"
@@ -112,11 +75,7 @@ if command -v fwupdmgr >/dev/null 2>&1; then
   run_or_warn fwupdmgr get-updates
   run_or_warn fwupdmgr update -y
 else
-  color_echo yellow "fwupdmgr not found; installing…"
-  dnf -y install fwupd
-  run_or_warn fwupdmgr refresh --force
-  run_or_warn fwupdmgr get-updates
-  run_or_warn fwupdmgr update -y
+  color_echo yellow "fwupdmgr not found; will be installed in bulk later."
 fi
 
 ### ---------- Flatpak / Flathub ----------
@@ -125,28 +84,12 @@ dnf -y install flatpak
 run_or_warn flatpak remote-delete fedora --force
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 run_or_warn flatpak repair
-run_or_warn flatpak update -y
 
-### ---------- RPM Fusion ----------
+### ---------- RPM Fusion (free + nonfree) ----------
 color_echo yellow "Enabling RPM Fusion (free + nonfree)…"
-dnf -y install "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
-dnf -y install "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
-dnf -y update @core
-
-### ---------- Media codecs & AMD VA-API/VDPAU ----------
-color_echo yellow "Installing multimedia groups and switching to full FFmpeg…"
-run_or_warn dnf -y group install multimedia
-run_or_warn dnf -y swap ffmpeg-free ffmpeg --allowerasing
-run_or_warn dnf -y upgrade @multimedia --setopt="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin
-run_or_warn dnf -y group install sound-and-video
-
-color_echo yellow "Installing AMD hardware-accelerated codecs (freeworld)…"
-run_or_warn dnf -y swap mesa-va-drivers mesa-va-drivers-freeworld
-run_or_warn dnf -y swap mesa-vdpau-drivers mesa-vdpau-drivers-freeworld
-
-### ---------- AppImage (FUSE) ----------
-color_echo yellow "Installing FUSE for AppImage support…"
-dnf -y install fuse
+dnf -y install \
+  "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+  "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
 
 ### ---------- Terra repo (low priority) ----------
 color_echo yellow "Adding Terra repository with low priority…"
@@ -159,28 +102,102 @@ gpgcheck=0
 priority=150
 EOF
 
-### ---------- COPR: cachyos kernel ----------
-color_echo yellow "Configuring COPR: cachyos kernel…"
-dnf -y copr enable bieszczaders/kernel-cachyos
+### ---------- VS Code repo ----------
+color_echo yellow "Adding Visual Studio Code repo…"
+rpm --import https://packages.microsoft.com/keys/microsoft.asc || true
+cat >/etc/yum.repos.d/vscode.repo <<'EOF'
+[code]
+name=Visual Studio Code
+baseurl=https://packages.microsoft.com/yumrepos/vscode
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+EOF
 
-# SELinux policy for module loading (if SELinux present)
-if command -v getenforce >/dev/null 2>&1; then
-  color_echo yellow "Adjusting SELinux boolean for kernel module loading…"
-  run_or_warn setsebool -P domain_kernel_load_modules on
-fi
+### ---------- Tailscale repo ----------
+color_echo yellow "Adding Tailscale repo…"
+dnf -y config-manager addrepo --from-repofile=https://pkgs.tailscale.com/stable/fedora/tailscale.repo
 
-# CPU baseline detection (x86-64 psABI)
+### ---------- COPRs (enable first, then refresh once) ----------
+color_echo yellow "Enabling COPRs…"
+COPRS=(
+  bieszczaders/kernel-cachyos
+  xxmitsu/mesa-git
+  kylegospo/webapp-manager
+  pesader/hblock
+  pgdev/ghostty
+  ilyaz/LACT
+)
+for c in "${COPRS[@]}"; do
+  run_or_warn dnf -y copr enable "$c"
+done
+
+### ---------- One refresh after repos/COPRs ----------
+color_echo yellow "Refreshing metadata…"
+dnf -y update --refresh
+
+### ---------- Bulk package install ----------
+PKGS=(
+  # Core tools
+  curl git wget unzip rsync fuse
+
+  # Firmware/FWUPD (if not already)
+  fwupd
+
+  # Browsers & comms
+  chromium thunderbird
+
+  # Terminals & utilities
+  ghostty btop htop unrar
+
+  # Webapp Manager, hBlock, LACT
+  webapp-manager hblock lact
+
+  # Media/graphics
+  vlc krita blender obs-studio kdenlive
+
+  # Gaming
+  steam lutris
+
+  # Containers / virtualization (podman as pkg; @virtualization as group later)
+  podman
+
+  # Fonts helpers
+  cabextract xorg-x11-font-utils fontconfig
+
+  # KDE theming dependency
+  kvantum
+
+  # Editors
+  code
+
+)
+
+color_echo yellow "Installing baseline packages in one transaction…"
+dnf -y install "${PKGS[@]}"
+
+### ---------- Group installs in one go ----------
+color_echo yellow "Installing DNF groups…"
+# 'multimedia' and 'sound-and-video' from RPM Fusion; '@virtualization' for KVM tools
+run_or_warn dnf -y group install multimedia sound-and-video @virtualization
+
+### ---------- Codec and driver swaps (must be separate ops) ----------
+color_echo yellow "Switching to full FFmpeg and freeworld Mesa VA/VDPAU…"
+run_or_warn dnf -y swap ffmpeg-free ffmpeg --allowerasing
+run_or_warn dnf -y upgrade @multimedia --setopt="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin
+run_or_warn dnf -y swap mesa-va-drivers mesa-va-drivers-freeworld
+run_or_warn dnf -y swap mesa-vdpau-drivers mesa-vdpau-drivers-freeworld
+
+### ---------- Kernel (CachyOS) selection (separate due to conditional choice) ----------
+color_echo yellow "Configuring CachyOS kernel based on CPU baseline…"
 install_cachyos_kernel() {
   local supported=""
   if [[ -x /lib64/ld-linux-x86-64.so.2 ]]; then
     supported="$(/lib64/ld-linux-x86-64.so.2 --help 2>/dev/null | grep -o 'x86_64_v[23]' | sort -u | tr '\n' ' ')"
   fi
-
   color_echo blue "Detected CPU ISA baselines: ${supported:-unknown}"
-
-  # Default logic: if v3 is supported -> default cachyos; else if only v2 -> LTS
   if echo "$supported" | grep -q 'x86_64_v3'; then
-    color_echo green "x86_64_v3 supported — installing kernel-cachyos (default)…"
+    color_echo green "x86_64_v3 supported — installing kernel-cachyos…"
     dnf -y install kernel-cachyos kernel-cachyos-devel-matched
   elif echo "$supported" | grep -q 'x86_64_v2'; then
     color_echo green "Only x86_64_v2 detected — installing kernel-cachyos-lts…"
@@ -191,88 +208,27 @@ install_cachyos_kernel() {
 }
 install_cachyos_kernel
 
-### ---------- COPR: Mesa-git ----------
-color_echo yellow "Enabling COPR: Mesa-git and refreshing…"
-dnf -y copr enable xxmitsu/mesa-git
-dnf -y update --refresh
+### ---------- Flatpak bulk updates & installs ----------
+color_echo yellow "Updating Flatpaks…"
+run_or_warn flatpak update -y
 
-### ---------- COPR: Webapp Manager (Mint port) ----------
-color_echo yellow "Installing webapp-manager from COPR…"
-dnf -y copr enable kylegospo/webapp-manager
-dnf -y install webapp-manager
+color_echo yellow "Installing Flatpaks in one go…"
+# Element (Riot), Signal, Dolphin, Bottles, Proton tools, ProtonUp, Flatseal, Video Downloader
+run_or_warn flatpak install -y flathub \
+  im.riot.Riot \
+  org.signal.Signal \
+  org.DolphinEmu.dolphin-emu \
+  com.usebottles.bottles \
+  com.github.Matoking.protontricks \
+  net.davidotek.pupgui2 \
+  com.github.tchx84.Flatseal \
+  com.github.unrud.VideoDownloader
 
-### ---------- COPR: hBlock ----------
-color_echo yellow "Installing hBlock (ad/tracker/malware hosts)…"
-dnf -y copr enable pesader/hblock
-dnf -y install hblock
-
-### ---------- COPR: Ghostty ----------
-color_echo yellow "Installing Ghostty terminal…"
-dnf -y copr enable pgdev/ghostty
-dnf -y install ghostty
-
-### ---------- COPR: LACT (AMD GPU control) ----------
-color_echo yellow "Installing LACT and enabling daemon…"
-dnf -y copr enable ilyaz/LACT
-dnf -y install lact
+### ---------- LACT daemon ----------
 run_or_warn systemctl enable --now lactd
-
-### ---------- Extra apps (from your “webapp” script) ----------
-color_echo yellow "Installing essential CLI tools…"
-dnf -y install btop htop unrar
-
-color_echo yellow "Installing browsers & comms…"
-dnf -y install chromium thunderbird
-
-color_echo yellow "Installing Element & Signal (Flatpak)…"
-run_or_warn flatpak install -y flathub im.riot.Riot
-run_or_warn flatpak install -y flathub org.signal.Signal
-
-### VS Code repo + install
-color_echo yellow "Installing Visual Studio Code…"
-rpm --import https://packages.microsoft.com/keys/microsoft.asc || true
-cat >/etc/yum.repos.d/vscode.repo <<'EOF'
-[code]
-name=Visual Studio Code
-baseurl=https://packages.microsoft.com/yumrepos/vscode
-enabled=1
-gpgcheck=1
-gpgkey=https://packages.microsoft.com/keys/microsoft.asc
-EOF
-dnf -y check-update || true
-dnf -y install code
-
-### Containers / virtualization meta
-color_echo yellow "Installing Podman & virtualization group…"
-dnf -y install podman
-dnf -y group install @virtualization || true
-
-### Media/graphics
-color_echo yellow "Installing media & graphics apps…"
-dnf -y install vlc krita blender obs-studio kdenlive
-
-### Gaming
-color_echo yellow "Installing Steam & Lutris…"
-dnf -y install steam lutris
-run_or_warn flatpak install -y flathub org.DolphinEmu.dolphin-emu
-
-### Tailscale
-color_echo yellow "Installing Tailscale…"
-dnf -y config-manager addrepo --from-repofile=https://pkgs.tailscale.com/stable/fedora/tailscale.repo
-dnf -y install tailscale
-run_or_warn systemctl enable --now tailscaled
-
-### Flatpak helpers
-color_echo yellow "Installing Bottles, Proton tools, Flatseal, Video Downloader…"
-run_or_warn flatpak install -y flathub com.usebottles.bottles
-run_or_warn flatpak install -y flathub com.github.Matoking.protontricks
-run_or_warn flatpak install -y flathub net.davidotek.pupgui2
-run_or_warn flatpak install -y flathub com.github.tchx84.Flatseal
-run_or_warn flatpak install -y flathub com.github.unrud.VideoDownloader
 
 ### ---------- Fonts ----------
 color_echo yellow "Installing Microsoft core fonts…"
-dnf -y install cabextract xorg-x11-font-utils fontconfig || true
 run_or_warn rpm -i https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
 
 color_echo yellow "Installing Google fonts (latest)…"
@@ -305,7 +261,6 @@ run_or_warn bash -lc '
   git clone https://github.com/vinceliuice/Qogir-icon-theme.git "$tmp/Qogir-icon-theme"
   cd "$tmp/Qogir-icon-theme" && ./install.sh -c all -t all
 '
-# Apply to GNOME for the actual (non-root) user if possible
 if command -v gsettings >/dev/null 2>&1; then
   run_or_warn sudo -u "$ACTUAL_USER" dbus-launch gsettings set org.gnome.desktop.interface icon-theme "Qogir"
 fi
@@ -328,14 +283,10 @@ run_or_warn systemctl disable NetworkManager-wait-online.service
 install_nordic_kde_theme() {
   color_echo yellow "Installing Nordic (KDE) theme…"
 
-  # Install Kvantum (needed for Kvantum themes)
-  dnf -y install kvantum
-
   tmp_dir="$(mktemp -d)"
   git clone --depth=1 https://github.com/EliverLara/Nordic.git "$tmp_dir/Nordic"
   src_kde="$tmp_dir/Nordic/kde"
 
-  # User-scope directories
   install -d -m 0755 \
     "$ACTUAL_HOME/.local/share/color-schemes" \
     "$ACTUAL_HOME/.local/share/plasma/look-and-feel" \
@@ -344,56 +295,46 @@ install_nordic_kde_theme() {
     "$ACTUAL_HOME/.config/Kvantum"
   chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local" "$ACTUAL_HOME/.config"
 
-  # 1) KDE Color Schemes
   if [[ -d "$src_kde/colorschemes" ]]; then
     cp -rTf "$src_kde/colorschemes" "$ACTUAL_HOME/.local/share/color-schemes"
     chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local/share/color-schemes"
   fi
 
-  # 2) Aurorae (Window Decorations)
   if [[ -d "$src_kde/aurorae/Nordic" ]]; then
     install -d -m 0755 "$ACTUAL_HOME/.local/share/aurorae/themes/Nordic"
     cp -rT "$src_kde/aurorae/Nordic" "$ACTUAL_HOME/.local/share/aurorae/themes/Nordic"
     chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local/share/aurorae"
   fi
 
-  # 3) Kvantum
   if [[ -d "$src_kde/kvantum" ]]; then
     cp -r "$src_kde/kvantum/"* "$ACTUAL_HOME/.config/Kvantum/" 2>/dev/null || true
     chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.config/Kvantum"
-    # Set default Kvantum theme
     sudo -u "$ACTUAL_USER" bash -lc 'printf "[General]\ntheme=Nordic-Darker\n" > "$HOME/.config/Kvantum/kvantum.kvconfig"'
   fi
 
-  # 4) Plasma Look-and-Feel
   if [[ -d "$src_kde/plasma/look-and-feel" ]]; then
     cp -r "$src_kde/plasma/look-and-feel/"* "$ACTUAL_HOME/.local/share/plasma/look-and-feel/"
     chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local/share/plasma/look-and-feel"
-    # Apply immediately (optional)
-    sudo -u "$ACTUAL_USER" dbus-launch lookandfeeltool -a com.github.eliverlara.nordic
+    run_or_warn sudo -u "$ACTUAL_USER" dbus-launch lookandfeeltool -a com.github.eliverlara.nordic
   fi
 
-  # 5) Konsole profiles
   if [[ -d "$src_kde/konsole" ]]; then
     cp -rTf "$src_kde/konsole" "$ACTUAL_HOME/.local/share/konsole"
     chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local/share/konsole"
   fi
 
-  # 6) Cursors (system-wide)
   if [[ -d "$src_kde/cursors" ]]; then
     rm -rf /usr/share/icons/Nordic 2>/dev/null || true
     cp -rT "$src_kde/cursors" /usr/share/icons/Nordic
     command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f /usr/share/icons/Nordic || true
   fi
 
-  # 7) Folder icons (optional, user-scope)
   if [[ -d "$src_kde/folders" ]]; then
     install -d -m 0755 "$ACTUAL_HOME/.local/share/icons/Nordic-folders"
     cp -rT "$src_kde/folders" "$ACTUAL_HOME/.local/share/icons/Nordic-folders"
     chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local/share/icons"
   fi
 
-  # 8) SDDM theme (already installed on Plasma, just copy + enable)
   if [[ -d "$src_kde/sddm" ]]; then
     target="/usr/share/sddm/themes/Nordic"
     rm -rf "$target" 2>/dev/null || true
@@ -405,13 +346,11 @@ Current=Nordic
 EOF
   fi
 
-  # Rebuild font/icon caches for user
   run_or_warn sudo -u "$ACTUAL_USER" bash -lc "fc-cache -fv >/dev/null"
 
   color_echo green "Nordic (KDE) theme installed & Kvantum enabled (Nordic-Darker)."
 }
 install_nordic_kde_theme
-
 
 ### ---------- Final touches ----------
 color_echo green "All done. Consider rebooting to use the new kernel if installed."

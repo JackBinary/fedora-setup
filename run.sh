@@ -189,7 +189,6 @@ COPRS=(
   xxmitsu/mesa-git
   kylegospo/webapp-manager
   pesader/hblock
-  pgdev/ghostty
   ilyaz/LACT
 )
 
@@ -243,8 +242,8 @@ dnf -y install "${PKGS[@]}" "https://vencord.dev/download/vesktop/amd64/rpm"
 
 ### ---------- Group installs in one go ----------
 color_echo yellow "Installing DNF groups…"
-# 'multimedia' and 'sound-and-video' from RPM Fusion; '@virtualization' for KVM tools
-run_or_prompt dnf -y group install multimedia sound-and-video @virtualization
+# 'multimedia' and 'sound-and-video' from RPM Fusion
+run_or_prompt dnf -y group install multimedia sound-and-video
 
 ### ---------- Codec and driver swaps (must be separate ops) ----------
 color_echo yellow "Switching to full FFmpeg and freeworld Mesa VA/VDPAU…"

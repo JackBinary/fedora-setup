@@ -26,10 +26,23 @@ backup_file() {
   fi
 }
 
-run_or_warn() {
-  set +e
-  "$@" || color_echo yellow "Warning: command failed (ignored): $*"
-  set -e
+run_or_prompt() {
+  local attempt=1
+  while true; do
+    set +e
+    "$@" || {
+      color_echo yellow "Warning: command failed: $*"
+      read -p "Do you want to try again, skip, or quit? (t/s/q): " choice
+      case "$choice" in
+        [Tt]* ) attempt=$((attempt + 1)); continue ;;
+        [Ss]* ) return 0 ;;
+        [Qq]* ) exit 1 ;;
+        * ) echo "Invalid choice. Please enter t, s, or q." ;;
+      esac
+    }
+    set -e
+    break
+  done
 }
 
 detect_user() {
@@ -71,9 +84,9 @@ grep -q '^max_parallel_downloads=' /etc/dnf/dnf.conf || echo "max_parallel_downl
 ### ---------- Firmware updates ----------
 if command -v fwupdmgr >/dev/null 2>&1; then
   color_echo yellow "Refreshing & applying firmware updates…"
-  run_or_warn fwupdmgr refresh --force
-  run_or_warn fwupdmgr get-updates
-  run_or_warn fwupdmgr update -y
+  run_or_prompt fwupdmgr refresh --force
+  run_or_prompt fwupdmgr get-updates
+  run_or_prompt fwupdmgr update -y
 else
   color_echo yellow "fwupdmgr not found; will be installed in bulk later."
 fi
@@ -81,9 +94,9 @@ fi
 ### ---------- Flatpak / Flathub ----------
 color_echo yellow "Configuring Flatpak Flathub…"
 dnf -y install flatpak
-run_or_warn flatpak remote-delete fedora --force
+run_or_prompt flatpak remote-delete fedora --force
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-run_or_warn flatpak repair
+run_or_prompt flatpak repair
 
 ### ---------- RPM Fusion (free + nonfree) ----------
 color_echo yellow "Enabling RPM Fusion (free + nonfree)…"
@@ -96,7 +109,7 @@ color_echo yellow "Adding Terra repository with low priority…"
 cat >/etc/yum.repos.d/terra.repo <<'EOF'
 [terra]
 name=Terra Linux repo
-baseurl=https://repos.fyralabs.com/terra/$releasever
+baseurl=https://repos.fyralabs.com/terra$releasever
 enabled=1
 gpgcheck=0
 priority=150
@@ -129,7 +142,7 @@ COPRS=(
   ilyaz/LACT
 )
 for c in "${COPRS[@]}"; do
-  run_or_warn dnf -y copr enable "$c"
+  run_or_prompt dnf -y copr enable "$c"
 done
 
 ### ---------- One refresh after repos/COPRs ----------
@@ -179,14 +192,14 @@ dnf -y install "${PKGS[@]}" "https://vencord.dev/download/vesktop/amd64/rpm"
 ### ---------- Group installs in one go ----------
 color_echo yellow "Installing DNF groups…"
 # 'multimedia' and 'sound-and-video' from RPM Fusion; '@virtualization' for KVM tools
-run_or_warn dnf -y group install multimedia sound-and-video @virtualization
+run_or_prompt dnf -y group install multimedia sound-and-video @virtualization
 
 ### ---------- Codec and driver swaps (must be separate ops) ----------
 color_echo yellow "Switching to full FFmpeg and freeworld Mesa VA/VDPAU…"
-run_or_warn dnf -y swap ffmpeg-free ffmpeg --allowerasing
-run_or_warn dnf -y upgrade @multimedia --setopt="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin
-run_or_warn dnf -y swap mesa-va-drivers mesa-va-drivers-freeworld
-run_or_warn dnf -y swap mesa-vdpau-drivers mesa-vdpau-drivers-freeworld
+run_or_prompt dnf -y swap ffmpeg-free ffmpeg --allowerasing
+run_or_prompt dnf -y upgrade @multimedia --setopt="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin
+run_or_prompt dnf -y swap mesa-va-drivers mesa-va-drivers-freeworld
+run_or_prompt dnf -y swap mesa-vdpau-drivers mesa-vdpau-drivers-freeworld
 
 ### ---------- Kernel (CachyOS) selection (separate due to conditional choice) ----------
 color_echo yellow "Configuring CachyOS kernel based on CPU baseline…"
@@ -210,11 +223,11 @@ install_cachyos_kernel
 
 ### ---------- Flatpak bulk updates & installs ----------
 color_echo yellow "Updating Flatpaks…"
-run_or_warn flatpak update -y
+run_or_prompt flatpak update -y
 
 color_echo yellow "Installing Flatpaks in one go…"
 # Element (Riot), Signal, Dolphin, Bottles, Proton tools, ProtonUp, Flatseal, Video Downloader
-run_or_warn flatpak install -y flathub \
+run_or_prompt flatpak install -y flathub \
   im.riot.Riot \
   org.signal.Signal \
   org.DolphinEmu.dolphin-emu \
@@ -225,16 +238,16 @@ run_or_warn flatpak install -y flathub \
   com.github.unrud.VideoDownloader
 
 ### ---------- LACT daemon ----------
-run_or_warn systemctl enable --now lactd
+run_or_prompt systemctl enable --now lactd
 
 ### ---------- Fonts ----------
 color_echo yellow "Installing Microsoft core fonts…"
-run_or_warn rpm -i https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
+run_or_prompt rpm -i https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm
 
 color_echo yellow "Installing Google fonts (latest)…"
 mkdir -p "$ACTUAL_HOME/.local/share/fonts/google"
 chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local/share/fonts"
-run_or_warn sudo -u "$ACTUAL_USER" bash -lc '
+run_or_prompt sudo -u "$ACTUAL_USER" bash -lc '
   set -e
   tmp=$(mktemp -d)
   wget -O "$tmp/google-fonts.zip" https://github.com/google/fonts/archive/main.zip
@@ -245,7 +258,7 @@ run_or_warn sudo -u "$ACTUAL_USER" bash -lc '
 color_echo yellow "Installing Adobe Source fonts…"
 mkdir -p "$ACTUAL_HOME/.local/share/fonts/adobe-fonts"
 chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local/share/fonts"
-run_or_warn sudo -u "$ACTUAL_USER" bash -lc '
+run_or_prompt sudo -u "$ACTUAL_USER" bash -lc '
   set -e
   git clone --depth 1 https://github.com/adobe-fonts/source-sans.git "$HOME/.local/share/fonts/adobe-fonts/source-sans" || true
   git clone --depth 1 https://github.com/adobe-fonts/source-serif.git "$HOME/.local/share/fonts/adobe-fonts/source-serif" || true
@@ -255,14 +268,14 @@ run_or_warn sudo -u "$ACTUAL_USER" bash -lc '
 
 ### ---------- Icon theme (Qogir) ----------
 color_echo yellow "Installing Qogir icon theme…"
-run_or_warn bash -lc '
+run_or_prompt bash -lc '
   set -e
   tmp=$(mktemp -d)
   git clone https://github.com/vinceliuice/Qogir-icon-theme.git "$tmp/Qogir-icon-theme"
   cd "$tmp/Qogir-icon-theme" && ./install.sh -c all -t all
 '
 if command -v gsettings >/dev/null 2>&1; then
-  run_or_warn sudo -u "$ACTUAL_USER" dbus-launch gsettings set org.gnome.desktop.interface icon-theme "Qogir"
+  run_or_prompt sudo -u "$ACTUAL_USER" dbus-launch gsettings set org.gnome.desktop.interface icon-theme "Qogir"
 fi
 
 ### ---------- DNS over TLS via systemd-resolved ----------
@@ -273,11 +286,11 @@ cat >/etc/systemd/resolved.conf.d/99-dns-over-tls.conf <<'EOF'
 DNS=1.1.1.2#security.cloudflare-dns.com 1.0.0.2#security.cloudflare-dns.com 2606:4700:4700::1112#security.cloudflare-dns.com 2606:4700:4700::1002#security.cloudflare-dns.com
 DNSOverTLS=yes
 EOF
-run_or_warn systemctl restart systemd-resolved
+run_or_prompt systemctl restart systemd-resolved
 
 ### ---------- Speed up boot ----------
 color_echo yellow "Disabling NetworkManager-wait-online.service to speed up boot…"
-run_or_warn systemctl disable NetworkManager-wait-online.service
+run_or_prompt systemctl disable NetworkManager-wait-online.service
 
 ### ---------- Nordic Theme (KDE) ----------
 install_nordic_kde_theme() {
@@ -315,7 +328,7 @@ install_nordic_kde_theme() {
   if [[ -d "$src_kde/plasma/look-and-feel" ]]; then
     cp -r "$src_kde/plasma/look-and-feel/"* "$ACTUAL_HOME/.local/share/plasma/look-and-feel/"
     chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$ACTUAL_HOME/.local/share/plasma/look-and-feel"
-    run_or_warn sudo -u "$ACTUAL_USER" dbus-launch lookandfeeltool -a com.github.eliverlara.nordic
+    run_or_prompt sudo -u "$ACTUAL_USER" dbus-launch lookandfeeltool -a com.github.eliverlara.nordic
   fi
 
   if [[ -d "$src_kde/konsole" ]]; then
@@ -346,7 +359,7 @@ Current=Nordic
 EOF
   fi
 
-  run_or_warn sudo -u "$ACTUAL_USER" bash -lc "fc-cache -fv >/dev/null"
+  run_or_prompt sudo -u "$ACTUAL_USER" bash -lc "fc-cache -fv >/dev/null"
 
   color_echo green "Nordic (KDE) theme installed & Kvantum enabled (Nordic-Darker)."
 }

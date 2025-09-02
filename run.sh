@@ -223,7 +223,7 @@ PKGS=(
   # Gaming
   steam lutris
 
-  # Containers / virtualization (podman as pkg; @virtualization as group later)
+  # Containers
   podman
 
   # Fonts helpers
@@ -249,8 +249,6 @@ run_or_prompt dnf -y group install multimedia sound-and-video
 color_echo yellow "Switching to full FFmpeg and freeworld Mesa VA/VDPAU…"
 run_or_prompt dnf -y swap ffmpeg-free ffmpeg --allowerasing
 run_or_prompt dnf -y upgrade @multimedia --setopt="install_weak_deps=False" --exclude=PackageKit-gstreamer-plugin
-run_or_prompt dnf -y swap mesa-va-drivers mesa-va-drivers-freeworld
-run_or_prompt dnf -y swap mesa-vdpau-drivers mesa-vdpau-drivers-freeworld
 
 ### ---------- Kernel (CachyOS) selection (separate due to conditional choice) ----------
 color_echo yellow "Configuring CachyOS kernel based on CPU baseline…"

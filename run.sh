@@ -209,7 +209,7 @@ PKGS=(
   fwupd
 
   # Browsers & comms
-  chromium thunderbird
+  chromium thunderbird vesktop
 
   # Terminals & utilities
   ghostty btop htop unrar
@@ -238,7 +238,7 @@ PKGS=(
 )
 
 color_echo yellow "Installing baseline packages in one transaction…"
-dnf -y install "${PKGS[@]}" "https://vencord.dev/download/vesktop/amd64/rpm"
+dnf -y install "${PKGS[@]}"
 
 ### ---------- Group installs in one go ----------
 color_echo yellow "Installing DNF groups…"

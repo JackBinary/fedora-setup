@@ -70,6 +70,16 @@ detect_user
 
 color_echo cyan "Fedora Setup — starting… (user: $ACTUAL_USER; home: $ACTUAL_HOME)"
 
+### ---------- DNS over TLS via systemd-resolved ----------
+color_echo yellow "Configuring systemd-resolved for DNS-over-TLS (Cloudflare security)…"
+mkdir -p /etc/systemd/resolved.conf.d
+cat >/etc/systemd/resolved.conf.d/99-dns-over-tls.conf <<'EOF'
+[Resolve]
+DNS=1.1.1.2#security.cloudflare-dns.com 1.0.0.2#security.cloudflare-dns.com 2606:4700:4700::1112#security.cloudflare-dns.com 2606:4700:4700::1002#security.cloudflare-dns.com
+DNSOverTLS=yes
+EOF
+run_or_prompt systemctl restart systemd-resolved
+
 # Minimal bootstrap so we can enable repos/COPRs in bulk
 dnf -y install dnf-plugins-core
 
@@ -277,16 +287,6 @@ run_or_prompt bash -lc '
 if command -v gsettings >/dev/null 2>&1; then
   run_or_prompt sudo -u "$ACTUAL_USER" dbus-launch gsettings set org.gnome.desktop.interface icon-theme "Qogir"
 fi
-
-### ---------- DNS over TLS via systemd-resolved ----------
-color_echo yellow "Configuring systemd-resolved for DNS-over-TLS (Cloudflare security)…"
-mkdir -p /etc/systemd/resolved.conf.d
-cat >/etc/systemd/resolved.conf.d/99-dns-over-tls.conf <<'EOF'
-[Resolve]
-DNS=1.1.1.2#security.cloudflare-dns.com 1.0.0.2#security.cloudflare-dns.com 2606:4700:4700::1112#security.cloudflare-dns.com 2606:4700:4700::1002#security.cloudflare-dns.com
-DNSOverTLS=yes
-EOF
-run_or_prompt systemctl restart systemd-resolved
 
 ### ---------- Speed up boot ----------
 color_echo yellow "Disabling NetworkManager-wait-online.service to speed up boot…"

@@ -253,20 +253,9 @@ run_or_prompt dnf -y upgrade @multimedia --setopt="install_weak_deps=False" --ex
 ### ---------- Kernel (CachyOS) selection (separate due to conditional choice) ----------
 color_echo yellow "Configuring CachyOS kernel based on CPU baseline…"
 install_cachyos_kernel() {
-  local supported=""
-  if [[ -x /lib64/ld-linux-x86-64.so.2 ]]; then
-    supported="$(/lib64/ld-linux-x86-64.so.2 --help 2>/dev/null | grep -o 'x86_64_v[23]' | sort -u | tr '\n' ' ')"
-  fi
-  color_echo blue "Detected CPU ISA baselines: ${supported:-unknown}"
-  if echo "$supported" | grep -q 'x86_64_v3'; then
-    color_echo green "x86_64_v3 supported — installing kernel-cachyos…"
-    dnf -y install kernel-cachyos kernel-cachyos-devel-matched
-  elif echo "$supported" | grep -q 'x86_64_v2'; then
-    color_echo green "Only x86_64_v2 detected — installing kernel-cachyos-lts…"
-    dnf -y install kernel-cachyos-lts kernel-cachyos-lts-devel-matched
-  else
-    color_echo red "Unable to confirm v2/v3 baseline. Skipping cachyos kernel to avoid breakage."
-  fi
+  sudo setsebool -P domain_kernel_load_modules on
+  color_echo green "kernel-cachyos…"
+  dnf -y install kernel-cachyos kernel-cachyos-devel-matched
 }
 install_cachyos_kernel
 
@@ -274,7 +263,7 @@ install_cachyos_kernel
 color_echo yellow "Updating Flatpaks…"
 run_or_prompt flatpak update -y
 
-color_echo yellow "Installing Flatpaks in one go…"
+color_echo yellow "Installing Flatpaks"
 # Element (Riot), Signal, Dolphin, Bottles, Proton tools, ProtonUp, Flatseal, Video Downloader
 run_or_prompt flatpak install -y flathub \
   im.riot.Riot \

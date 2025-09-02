@@ -64,6 +64,26 @@ need_root() {
   fi
 }
 
+add_repo_if_missing() {
+  local name="$1" file="/etc/yum.repos.d/${name}.repo"
+  shift
+  if [[ -f "$file" ]]; then
+    color_echo cyan "Repo '${name}' already exists, skipping."
+  else
+    run_or_prompt "$@"
+  fi
+}
+
+enable_copr_if_missing() {
+  local copr="$1"
+  if dnf copr list | grep -q "$copr"; then
+    color_echo cyan "COPR '$copr' already enabled, skipping."
+  else
+    run_or_prompt dnf -y copr enable "$copr"
+  fi
+}
+
+
 ### ---------- Start ----------
 need_root
 detect_user
@@ -116,7 +136,8 @@ dnf -y install \
 
 ### ---------- Terra repo (low priority) ----------
 color_echo yellow "Adding Terra repository with low priority…"
-cat >/etc/yum.repos.d/terra.repo <<'EOF'
+if ! rpm -q terra-release >/dev/null 2>&1; then
+  cat >/etc/yum.repos.d/terra.repo <<'EOF'
 [terra]
 name=Terra Linux repo
 baseurl=https://repos.fyralabs.com/terra$releasever
@@ -124,11 +145,15 @@ enabled=1
 gpgcheck=0
 priority=150
 EOF
+else
+  color_echo cyan "Terra repo already installed, skipping."
+fi
 
 ### ---------- VS Code repo ----------
 color_echo yellow "Adding Visual Studio Code repo…"
-rpm --import https://packages.microsoft.com/keys/microsoft.asc || true
-cat >/etc/yum.repos.d/vscode.repo <<'EOF'
+if [[ ! -f /etc/yum.repos.d/vscode.repo ]]; then
+  rpm --import https://packages.microsoft.com/keys/microsoft.asc || true
+  cat >/etc/yum.repos.d/vscode.repo <<'EOF'
 [code]
 name=Visual Studio Code
 baseurl=https://packages.microsoft.com/yumrepos/vscode
@@ -136,10 +161,13 @@ enabled=1
 gpgcheck=1
 gpgkey=https://packages.microsoft.com/keys/microsoft.asc
 EOF
+else
+  color_echo cyan "VS Code repo already exists, skipping."
+fi
 
 ### ---------- Tailscale repo ----------
 color_echo yellow "Adding Tailscale repo…"
-dnf -y config-manager addrepo --from-repofile=https://pkgs.tailscale.com/stable/fedora/tailscale.repo
+add_repo_if_missing tailscale dnf -y config-manager addrepo --from-repofile=https://pkgs.tailscale.com/stable/fedora/tailscale.repo
 
 ### ---------- COPRs (enable first, then refresh once) ----------
 color_echo yellow "Enabling COPRs…"
@@ -151,8 +179,9 @@ COPRS=(
   pgdev/ghostty
   ilyaz/LACT
 )
+
 for c in "${COPRS[@]}"; do
-  run_or_prompt dnf -y copr enable "$c"
+  enable_copr_if_missing "$c"
 done
 
 ### ---------- One refresh after repos/COPRs ----------

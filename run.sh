@@ -65,8 +65,13 @@ need_root() {
 }
 
 add_repo_if_missing() {
-  local name="$1" file="/etc/yum.repos.d/${name}.repo"
+  if [[ $# -lt 2 ]]; then
+    color_echo red "Usage: add_repo_if_missing <name> <command...>"
+    return 1
+  fi
+  local name="$1"
   shift
+  local file="/etc/yum.repos.d/${name}.repo"
   if [[ -f "$file" ]]; then
     color_echo cyan "Repo '${name}' already exists, skipping."
   else
@@ -75,13 +80,21 @@ add_repo_if_missing() {
 }
 
 enable_copr_if_missing() {
+  if [[ $# -lt 1 ]]; then
+    color_echo red "Usage: enable_copr_if_missing <copr>"
+    return 1
+  fi
+
   local copr="$1"
-  if dnf copr list | grep -q "$copr"; then
-    color_echo cyan "COPR '$copr' already enabled, skipping."
+
+  # list COPRs, suppress errors if copr plugin not ready yet
+  if dnf copr list 2>/dev/null | grep -q -E "^${copr}\b"; then
+    color_echo cyan "COPR '${copr}' already enabled, skipping."
   else
     run_or_prompt dnf -y copr enable "$copr"
   fi
 }
+
 
 
 ### ---------- Start ----------
